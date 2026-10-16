@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# 在服务器上以 root 运行：安装 / 升级林北 headscale。
+# 在服务器上以 root 运行：安装 / 升级 / 备份林北 headscale。由 deploy.sh 上传并调用。
 #   install.sh check   <域名>   只检查，不改任何东西
-#   install.sh install <域名>   安装或升级（可重复执行；已有的 token、数据库、API key 不动）
-# 同目录要有 headscale（Linux 二进制）、headscale.service、linbei-derp-map.yaml。
+#   install.sh install <域名>   安装或升级（可重复执行；数据库与 noise 私钥不动）
+#   install.sh backup  <域名>   短暂停服，把 /var/lib/headscale 打包成同目录的 backup.tgz
+# 同目录要有 headscale（Linux 二进制）、headscale.service、linbei-derp-map.yaml；
+# 可选 admin_key（固定管理密钥，首次安装必须有）、restore.tgz（从备份恢复）。
 set -euo pipefail
 
 MODE="${1:-}"
@@ -10,14 +12,14 @@ DOMAIN="${2:-}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ETC=/etc/headscale
 VAR=/var/lib/headscale
-TOKEN_FILE="${ETC}/derp_node_token"
+ADMIN_KEY="${ETC}/admin_key"
 
 die() { echo "错误：$*" >&2; exit 1; }
 ok() { echo "  [好] $*"; }
 bad() { echo "  [不行] $*"; FAILED=1; }
 warn() { echo "  [注意] $*"; }
 
-[[ "${MODE}" == check || "${MODE}" == install ]] || die "用法：install.sh check|install <域名>"
+[[ "${MODE}" == check || "${MODE}" == install || "${MODE}" == backup ]] || die "用法：install.sh check|install|backup <域名>"
 [[ "${DOMAIN}" =~ ^[A-Za-z0-9.-]+\.[A-Za-z]+$ ]] || die "域名不对：${DOMAIN}"
 [[ "$(id -u)" == 0 ]] || die "要用 root 运行"
 
@@ -48,7 +50,15 @@ do_check() {
     if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
         warn "ufw 开着，安装时会放行 80/443"
     fi
-    [[ -f "${ETC}/config.yaml" ]] && warn "已经装过，install 会升级二进制与配置（数据库、token、API key 保留）"
+    [[ -f "${ETC}/config.yaml" ]] && warn "已经装过，install 会升级二进制与配置（数据库、noise 私钥保留）"
+    if [[ -s "${HERE}/admin_key" ]]; then
+        ok "带了管理密钥"
+    elif [[ -s "${ADMIN_KEY}" ]]; then
+        ok "沿用服务器上已有的管理密钥"
+    else
+        bad "首次安装要用 --admin-key-file 传管理密钥（和 sspapi data/tailnet.json 的 admin_key 相同）"
+    fi
+    [[ -s "${HERE}/restore.tgz" ]] && warn "带了备份包，install 会先用它覆盖 ${VAR}（现有的另存一份）"
     echo "  云厂商安全组要放行 TCP 80 和 443，这一项脚本查不到"
     return "${FAILED}"
 }
@@ -66,11 +76,27 @@ do_install() {
     install -m 644 "${HERE}/headscale.service" /etc/systemd/system/headscale.service
     install -m 644 "${HERE}/linbei-derp-map.yaml" "${ETC}/linbei-derp-map.yaml"
 
-    if [[ ! -s "${TOKEN_FILE}" ]]; then
-        (umask 077 && head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' >"${TOKEN_FILE}")
-        echo "  已生成节点 token"
+    if [[ -s "${HERE}/admin_key" ]]; then
+        local len
+        len="$(tr -d ' \r\n' <"${HERE}/admin_key" | wc -c | tr -d ' ')"
+        ((len >= 32)) || die "管理密钥至少 32 个字符"
+        install -m 640 -o root -g headscale "${HERE}/admin_key" "${ADMIN_KEY}"
+        echo "  已写入管理密钥"
     fi
-    chown root:headscale "${TOKEN_FILE}" && chmod 640 "${TOKEN_FILE}"
+    # 旧版 fork 的 DERP 名单已挪到 sspapi，它的文件用不上了。
+    rm -f "${ETC}/derp_node_token" "${VAR}/linbei_derp_mesh.json" "${VAR}/.linbei_sspapi_key_created"
+
+    if [[ -s "${HERE}/restore.tgz" ]]; then
+        if [[ -n "$(ls -A "${VAR}" 2>/dev/null)" ]]; then
+            local keep="${VAR}.before-restore-$(date +%Y%m%d%H%M%S)"
+            cp -a "${VAR}" "${keep}"
+            echo "  现有数据另存到 ${keep}"
+        fi
+        find "${VAR}" -mindepth 1 -delete
+        tar -xzf "${HERE}/restore.tgz" -C "${VAR}"
+        chown -R headscale:headscale "${VAR}"
+        echo "  已从备份恢复 ${VAR}"
+    fi
 
     cat >"${ETC}/config.yaml" <<EOF
 # 由 linbei/deploy/install.sh 生成，重新安装会覆盖。
@@ -125,9 +151,7 @@ unix_socket: /var/run/headscale/headscale.sock
 unix_socket_permission: "0770"
 
 linbei:
-  derp_mesh:
-    node_token_path: ${TOKEN_FILE}
-    expiry: 24h
+  admin_key_path: ${ADMIN_KEY}
 EOF
     chown root:headscale "${ETC}/config.yaml" && chmod 640 "${ETC}/config.yaml"
 
@@ -151,29 +175,21 @@ EOF
         die "安装没完成"
     fi
     ok "https://${DOMAIN}/health 正常，证书有效"
-    journalctl -u headscale --no-pager | grep -q "linbei DERP mesh registry enabled" &&
-        ok "DERP 注册表已开启" || warn "日志里没看到 DERP 注册表开启"
-
-    local apikey_marker="${VAR}/.linbei_sspapi_key_created"
+    journalctl -u headscale --no-pager | grep -q "linbei fixed admin key enabled" &&
+        ok "固定管理密钥已生效" || warn "日志里没看到固定管理密钥生效"
     echo
-    echo "================ 需要你记下的 ================"
-    echo "节点 token（每台 SingR 执行 singr derp enable 时用）："
-    echo "  $(cat "${TOKEN_FILE}")"
-    if [[ ! -f "${apikey_marker}" ]]; then
-        local apikey
-        apikey="$(headscale apikeys create -e 3650d 2>/dev/null | tail -1 || true)"
-        if [[ "${apikey}" == hskey-api-* ]]; then
-            echo "sspapi 用的 API key（只显示这一次，填进 sspapi 的 data/tailnet.json）："
-            echo "  ${apikey}"
-            touch "${apikey_marker}"
-        else
-            echo "没能生成 API key，稍后手动执行：headscale apikeys create -e 3650d"
-        fi
-    else
-        echo "sspapi 用的 API key：之前已经生成过，不再重复生成（丢了就 headscale apikeys create -e 3650d 再建一把）"
-    fi
-    echo "要备份：${VAR}/（数据库、noise 私钥、DERP mesh 状态）和 ${TOKEN_FILE}"
-    echo "=============================================="
+    echo "装好了。sspapi 的 data/tailnet.json：control_url 填 https://${DOMAIN}，admin_key 填同一把管理密钥。"
+    echo "要备份：bash linbei/deploy/deploy.sh <服务器> ${DOMAIN} backup（数据库、noise 私钥）"
+}
+
+do_backup() {
+    [[ -d "${VAR}" ]] || die "${VAR} 不存在，还没装过"
+    echo "== 备份（headscale 会停几秒）"
+    systemctl stop headscale
+    tar -czf "${HERE}/backup.tgz" -C "${VAR}" .
+    systemctl start headscale
+    chmod 600 "${HERE}/backup.tgz"
+    ok "已打包 $(du -h "${HERE}/backup.tgz" | cut -f1)"
 }
 
 "do_${MODE}"

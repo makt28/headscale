@@ -288,8 +288,12 @@ func TestAutoApproveRoutes(t *testing.T) {
 				netip.MustParsePrefix("8.11.0.0/24"),
 			},
 			want: []netip.Prefix{
+				// Linbei fork: exit routes approve themselves for every node
+				// (hscontrol/policy/linbei_exit_routes.go), not only tag:exit.
 				netip.MustParsePrefix("10.10.0.0/16"),
 				netip.MustParsePrefix("10.11.0.0/24"),
+				tsaddr.AllIPv4(),
+				tsaddr.AllIPv6(),
 			},
 			want2: []netip.Prefix{
 				tsaddr.AllIPv4(),

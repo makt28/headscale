@@ -1,16 +1,18 @@
 # 林北网络的 headscale fork
 
-在上游 headscale 上只做三件事（用户隔离、固定管理密钥、客户端 DERP 列表），改动尽量放在独立文件里，合并上游时冲突面最小。
+在上游 headscale 上只做四件事（用户隔离、固定管理密钥、客户端 DERP 列表、出口路由自动批准），改动尽量放在独立文件里，合并上游时冲突面最小。
 
 | 改动 | 文件 | 碰到的上游文件 |
 |---|---|---|
 | 用户硬隔离 | `hscontrol/state/linbei_isolation.go` | `hscontrol/state/state.go` 一行（`NewNodeStore` 改用 `isolatedPeersFunc`） |
 | 固定管理密钥（给 sspapi 用） | `hscontrol/state/linbei_admin_key.go`、`hscontrol/linbei_admin_key.go` | `hscontrol/state/state.go` 两处各一行（`ValidateAPIKey` / `AuthenticateAPIKey` 开头）、`hscontrol/app.go` 一行（`createRouter` 里 `h.loadLinbeiAdminKey()`） |
 | 客户端 DERP 列表 | `linbei/derp-map.yaml` | 无，靠配置引用 |
+| 出口路由自动批准 | `hscontrol/policy/linbei_exit_routes.go` | `hscontrol/policy/policy.go` 一行（`ApproveRoutesWithPolicy` 里 `canApprove` 先问 `linbeiAutoApproveExitRoute`） |
 
 另外动了上游测试：
 
 - `hscontrol/mapper/mapper_test.go` 的 `allow_all` 期望值从 2 改成 1（隔离后看不到别的用户）。
+- `hscontrol/db/node_test.go` 的 `TestAutoApproveRoutes/2068-approve-issue-sub-exit-tag`：普通用户设备的期望里加上 `0.0.0.0/0`、`::/0`（上游只让 `tag:exit` 自动批准出口，fork 里设备宣告即批准，见第 4 节）；网段部分的期望不变。
 - `hscontrol/servertest` 里前提就是「不同用户互相看得见」的测试，各加一行 `skipCrossUser(t) // Linbei fork`：`TestNodeAttrsUserTargetIsolated`、`TestPeerRemovedAsDelta`、`TestIssuesIdentity/cross_user_visibility_default_policy`、`TestIssuesMapContent/all_peers_have_user_profiles`、`TestIssuesMapContent/policy_change_carries_user_profile_for_new_peer`、`TestIssuesRoutes/via_exit_node_offered_to_members`（用户看不见运营方打 tag 的出口节点）、`TestPolicyChanges/policy_with_multiple_users`、`TestGrantPolicies/grant_per_user_isolation`、`TestViaGrantMapCompat`（回放的官方抓包混着多个用户和打 tag 的路由器）。它们原本覆盖的东西在 `hscontrol/servertest/linbei_isolation_test.go` 里换成同一用户内测：默认策略下两个用户互不可见、同用户互见且对端的用户资料照常下发，以及删节点按增量下发。合并上游后若有**新的**跨用户测试失败，照这个办法处理，并确认失败原因确实是「看不见别的用户」。
 
 ## 1. 用户硬隔离
@@ -56,6 +58,15 @@ derp:
 
 测试：`go test ./hscontrol/derp -run Linbei`（字段名写错会被解析成零值，这个测试守着）。
 
+## 4. 出口路由自动批准
+
+上游里设备宣告「我能当出口」（`0.0.0.0/0`、`::/0`）只是宣告，要管理员批准或策略 `autoApprovers` 放行才生效：共用的 tailnet 里，自称出口的设备能把别人的流量引到自己那里。我们这里用户已经硬隔离，出口只有同一账号的设备看得见，而且那些设备还得自己选它，**设备主人宣告就等于同意**。策略也表达不了这件事：`autoApprovers` 只认写死的用户名、group 和 tag，不认「每个用户」，而客户的用户是按需建的。
+
+- **只批这两条出口路由**。普通网段路由（`10.0.0.0/8` 之类）照旧要策略或管理员批准，免得一台配错的设备悄悄把主人其它设备上的某个局域网段接管过去。
+- 接线在 `ApproveRoutesWithPolicy`，state 里三处批准（注册、设备上报路由、策略重载）都经过它。已批准的路由照旧不会被自动收回。
+
+测试：`go test ./hscontrol/policy -run TestLinbei`（无策略、有策略但没 autoApprovers 两种情况下出口批、网段不批；只认精确的 `/0`）、`go test ./hscontrol/servertest -run TestLinbeiExitNodeSelfApproves`（设备宣告出口后不经任何人批准，同账号另一台设备收到的 AllowedIPs 里就有 `0.0.0.0/0`、`::/0`，网段没有；别的用户看不见它）。两个测试都做过变异检查：去掉 `policy.go` 那一行接线就会失败。
+
 ## 合并上游后要跑
 
 ```bash
@@ -64,6 +75,7 @@ go test ./hscontrol/mapper -run TestBuildFromChangeVisibilityMatchesFullMap -cou
 go test ./hscontrol -run Linbei -count=1
 go test ./hscontrol/servertest -run TestLinbei -count=1
 go test ./hscontrol/derp -run Linbei -count=1
+go test ./hscontrol/policy -run TestLinbei -count=1
 go test ./hscontrol/servertest -skip "TestAPIv2|TestHAProberProperty" -parallel 32 -count=1   # 约 3 分钟。TestAPIv2* 要 nix 环境里的 tofu；TestHAProberProperty 是串行的属性测试，单它就 20 多分钟（上游 CI 也跳过），与隔离无关
 ```
 

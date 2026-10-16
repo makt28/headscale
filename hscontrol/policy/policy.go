@@ -53,7 +53,7 @@ func ApproveRoutesWithPolicy(pm PolicyManager, nv types.NodeView, currentApprove
 		}
 
 		// Check if this new route can be auto-approved by policy
-		canApprove := pm.NodeCanApproveRoute(nv, route)
+		canApprove := linbeiAutoApproveExitRoute(route) || pm.NodeCanApproveRoute(nv, route)
 		if canApprove {
 			newApproved = append(newApproved, route)
 		}

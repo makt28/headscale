@@ -67,6 +67,12 @@ derp:
 
 测试：`go test ./hscontrol/policy -run TestLinbei`（无策略、有策略但没 autoApprovers 两种情况下出口批、网段不批；只认精确的 `/0`）、`go test ./hscontrol/servertest -run TestLinbeiExitNodeSelfApproves`（设备宣告出口后不经任何人批准，同账号另一台设备收到的 AllowedIPs 里就有 `0.0.0.0/0`、`::/0`，网段没有；别的用户看不见它）。两个测试都做过变异检查：去掉 `policy.go` 那一行接线就会失败。
 
+## 5. 重新登记时设备名改了，域名跟着改
+
+`hscontrol/state/linbei_reregister_hostname.go`，在 `reregisterNodeWithPAK` 里调一行。上游处理「已有设备带授权 key 重新登记」时只改 `Hostname`、不改 `GivenName`（域名）；它自己在那里留了 TODO，说重新登记应该和 MapRequest 用同一套合并规则。客户端改名后带 key 重起内核，会先重新登记、再发 MapRequest，后者看到 `Hostname` 已经是新的，于是域名永远停在旧名上（2026-10-17 实测：`Hostname` 是 `nec`，`Name` 还是 `desktop-gk2q71f`）。
+
+现在重新登记也用 MapRequest 那条规则：当前域名还是旧设备名自动生成的样子（等于它、或带 `-数字` 撞名后缀）才跟着改，管理员手动改过的保留；新名字撞了别的设备照常加后缀。测试 `hscontrol/linbei_reregister_hostname_test.go`。
+
 ## 合并上游后要跑
 
 ```bash

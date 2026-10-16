@@ -2937,6 +2937,7 @@ func (s *State) reregisterNodeWithPAK(
 		}
 
 		node.NodeKey = regReq.NodeKey
+		linbeiRederiveGivenName(node, hostname) // Linbei fork: before Hostname is overwritten
 		node.Hostname = hostname
 
 		// TODO(kradalby): We should ensure we use the same hostinfo and node merge semantics
@@ -3068,6 +3069,7 @@ func (s *State) reregisterNodeWithPAK(
 		s.nodeStore.UpdateNode(prior.ID, func(n *types.Node) {
 			n.NodeKey = prior.NodeKey
 			n.Hostname = prior.Hostname
+			n.GivenName = prior.GivenName // Linbei fork: linbeiRederiveGivenName may have changed it
 			n.Hostinfo = prior.Hostinfo
 			n.RegisterMethod = prior.RegisterMethod
 			n.Tags = prior.Tags

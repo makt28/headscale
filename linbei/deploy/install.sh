@@ -175,8 +175,15 @@ EOF
         die "安装没完成"
     fi
     ok "https://${DOMAIN}/health 正常，证书有效"
-    journalctl -u headscale --no-pager | grep -q "linbei fixed admin key enabled" &&
-        ok "固定管理密钥已生效" || warn "日志里没看到固定管理密钥生效"
+    # 不能 journalctl | grep -q：grep 找到就退出，journalctl 收到 SIGPIPE，pipefail 下整条管道算失败，
+    # 日志一长就误报（输出到 /dev/null 的 grep 也会这样提前退出）。先读进变量再匹配。
+    local logs
+    logs="$(journalctl -u headscale --no-pager 2>/dev/null || true)"
+    if [[ "${logs}" == *"linbei fixed admin key enabled"* ]]; then
+        ok "固定管理密钥已生效"
+    else
+        warn "日志里没看到固定管理密钥生效"
+    fi
     echo
     echo "装好了。sspapi 的 data/tailnet.json：control_url 填 https://${DOMAIN}，admin_key 填同一把管理密钥。"
     echo "要备份：bash linbei/deploy/deploy.sh <服务器> ${DOMAIN} backup（数据库、noise 私钥）"

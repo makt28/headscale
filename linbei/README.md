@@ -88,7 +88,26 @@ go test ./hscontrol/servertest -skip "TestAPIv2|TestHAProberProperty" -parallel 
 - **隔离**：两个用户三台设备（客户端是 sing-box 1.14.3 的 tailscale endpoint），未配策略。同用户互通，跨用户双向不通；同一批客户端不重启，换成上游 headscale 后跨用户立刻互通，换回 fork 立刻断开。
 - **DERP 注册表**：两台 SingR 用 `singr derp enable --control ... --token ...` 报到后自动互相发现并 mesh，分别连在两台节点上的两个客户端经 DERP 双向收发成功；节点 `disable` 后另一台一次刷新内撤掉它；headscale 宕机时节点重启靠缓存重建 mesh。
 
+## 部署
+
+`linbei/deploy/`：在 Mac 上一条命令完成编译、上传、安装 / 升级。
+
+```bash
+bash linbei/deploy/deploy.sh root@<服务器> <域名> check   # 只检查，不改服务器
+bash linbei/deploy/deploy.sh root@<服务器> <域名>         # 安装或升级，可重复执行
+```
+
+- **前提**：Debian / Ubuntu x86_64（只编了 linux/amd64），能用 root SSH 登录（密码在终端里自己输，同一连接复用 10 分钟）；域名 A 记录指向服务器、**不开 Cloudflare 代理**（Cloudflare 不支持 tailscale 控制协议的连接升级）；**80 和 443 空着**、安全组放行。
+- **做法**：headscale 直接对外，用内置的 Let's Encrypt 申请证书（官方支持的方式；FAQ 说他们不用反向代理、反代出问题只能靠社区）。不经反代，节点报到时 headscale 直接看到来源 IP，不用配 `trusted_proxies`。
+- `check` 查：systemd、架构、curl、80/443 是否被占用、域名是否解析到本机公网 IP。云厂商安全组查不到，要自己确认。
+- `install` 先跑同样的检查，不过就什么都不改；过了才装：系统用户 `headscale`、`/usr/bin/headscale`、systemd 单元（`packaging/systemd/headscale.service`）、DERP 列表、`/etc/headscale/config.yaml`（每次重新生成，**手改会被覆盖**）、节点 token（只在第一次生成）、ufw 开着的话放行 80/443。然后启动、等 `/health` 用正式证书答通，最后打印节点 token 和给 sspapi 用的 API key。
+- **API key 只在第一次安装时生成并打印一次**（标记文件 `/var/lib/headscale/.linbei_sspapi_key_created`），重复执行不会再建新 key。丢了就在服务器上 `headscale apikeys create -e 3650d` 再建一把，旧的用 `headscale apikeys expire --prefix <前缀>` 作废。
+- **升级**：改完代码重跑同一条命令。数据库、noise 私钥、DERP mesh 状态（PSK）、节点 token、API key 都保留。
+- **要备份**：`/var/lib/headscale/`（数据库、`noise_private.key`、`linbei_derp_mesh.json`）和 `/etc/headscale/derp_node_token`。noise 私钥丢了所有设备要重新登录；mesh 状态丢了会换 PSK，节点要重启 SingR 才能重新互联。
+
+线上：`https://hs.rickroll.top`（2026-10-16 部署）。
+
 ## 还没做
 
-- sspapi 给每个林北用户在 headscale 里建用户、签授权 key（客户端登录组网用）。
 - 林北客户端接入组网（tailscale endpoint、DERP 中继组的探测与分流、TUN 下的路由）。
+- 客户端拿授权 key 的接口已在 sspapi（`public/tailnet.php`），各 API 域还要放 `data/tailnet.json`。

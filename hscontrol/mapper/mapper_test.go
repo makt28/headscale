@@ -497,7 +497,10 @@ func TestBuildFromChangeVisibilityMatchesFullMap(t *testing.T) {
 		policy   string
 		wantFull int
 	}{
-		{"allow_all", `{"acls":[{"action":"accept","src":["*"],"dst":["*:*"]}]}`, 2},
+		// Linbei fork: users are isolated regardless of policy
+		// (state/linbei_isolation.go), so even allow-all only shows n1b.
+		// Upstream expects 2 here.
+		{"allow_all", `{"acls":[{"action":"accept","src":["*"],"dst":["*:*"]}]}`, 1},
 		{
 			"user_isolation",
 			`{"acls":[

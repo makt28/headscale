@@ -273,7 +273,8 @@ func NewState(cfg *types.Config) (*State, error) {
 
 	batchTimeout := cmp.Or(cfg.Tuning.NodeStoreBatchTimeout, defaultNodeStoreBatchTimeout)
 
-	nodeStore := NewNodeStore(nodes, policyPeersFunc(polMan), batchSize, batchTimeout)
+	// Linbei fork: per-user isolation, see linbei_isolation.go.
+	nodeStore := NewNodeStore(nodes, isolatedPeersFunc(polMan), batchSize, batchTimeout)
 	nodeStore.Start()
 
 	s := &State{

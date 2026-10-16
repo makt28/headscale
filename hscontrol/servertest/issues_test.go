@@ -95,6 +95,8 @@ func TestIssuesMapContent(t *testing.T) {
 
 	// Each peer should have a valid user profile in the [netmap.NetworkMap].
 	t.Run("all_peers_have_user_profiles", func(t *testing.T) {
+		skipCrossUser(t) // Linbei fork
+
 		t.Parallel()
 
 		srv := servertest.NewServer(t)
@@ -139,6 +141,8 @@ func TestIssuesMapContent(t *testing.T) {
 	// Otherwise the netmap has a peer whose owner is unknown and code
 	// reading nm.UserProfiles[peer.User()] sees a zero UserProfileView.
 	t.Run("policy_change_carries_user_profile_for_new_peer", func(t *testing.T) {
+		skipCrossUser(t) // Linbei fork
+
 		t.Parallel()
 
 		srv := servertest.NewServer(t)
@@ -399,6 +403,8 @@ func TestIssuesRoutes(t *testing.T) {
 	// grant. The via rule is compiled onto the via-tagged node, so only
 	// the exit node's matchers authorise the pair.
 	t.Run("via_exit_node_offered_to_members", func(t *testing.T) {
+		skipCrossUser(t) // Linbei fork: users never see operator (tagged) nodes
+
 		t.Parallel()
 
 		srv := servertest.NewServer(t)
@@ -961,6 +967,8 @@ func TestIssuesIdentity(t *testing.T) {
 
 	// Cross-user visibility with default policy.
 	t.Run("cross_user_visibility_default_policy", func(t *testing.T) {
+		skipCrossUser(t) // Linbei fork
+
 		t.Parallel()
 
 		srv := servertest.NewServer(t)
@@ -1096,6 +1104,8 @@ func TestIssuesIdentity(t *testing.T) {
 // TODO(kradalby): with the tailscale/tailscale#15660 compat gone, removals
 // ride full rebuilds; assert they reach the netmap instead.
 func TestPeerRemovedAsDelta(t *testing.T) {
+	skipCrossUser(t) // Linbei fork
+
 	t.Parallel()
 
 	// MagicDNS puts DNSConfig in policy responses, making them full rebuilds.

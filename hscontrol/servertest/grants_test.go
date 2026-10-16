@@ -296,6 +296,8 @@ func TestGrantPolicies(t *testing.T) { //nolint:gocyclo
 	})
 
 	t.Run("grant_per_user_isolation", func(t *testing.T) {
+		skipCrossUser(t) // Linbei fork
+
 		t.Parallel()
 
 		srv := servertest.NewServer(t)

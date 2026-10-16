@@ -1,0 +1,44 @@
+# Linbei fork: the DERP map tailnet clients receive.
+#
+# One region. Its DERP "node" is the virtual domain derp.linbei.internal: the
+# Linbei client reaches it through its proxy tunnel, and the SingR node it
+# exits from rewrites that domain to its own loopback DERP. .internal never
+# resolves publicly, so a mis-routed client fails closed.
+#
+# insecurefortests: the relays use per-node self-signed certificates; the
+# outer proxy tunnel already authenticates and encrypts, and DERP only carries
+# end-to-end encrypted WireGuard packets.
+#
+# The STUN-only nodes let clients learn their public address for NAT
+# traversal (STUN cannot go through the tunnel). Prefer servers reachable
+# from mainland China; verify reachability before relying on them.
+#
+# Keys are lowercased Go field names of tailcfg.DERPMap (regionid, not
+# RegionID); headscale rejects a map with no regions.
+regions:
+  900:
+    regionid: 900
+    regioncode: linbei
+    regionname: Linbei Relay
+    nodes:
+      - name: 900relay
+        regionid: 900
+        hostname: derp.linbei.internal
+        derpport: 443
+        stunport: -1
+        insecurefortests: true
+      - name: 900stun-miwifi
+        regionid: 900
+        hostname: stun.miwifi.com
+        stunonly: true
+        stunport: 3478
+      - name: 900stun-bilibili
+        regionid: 900
+        hostname: stun.chat.bilibili.com
+        stunonly: true
+        stunport: 3478
+      - name: 900stun-cloudflare
+        regionid: 900
+        hostname: stun.cloudflare.com
+        stunonly: true
+        stunport: 3478

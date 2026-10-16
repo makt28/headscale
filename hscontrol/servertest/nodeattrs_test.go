@@ -101,6 +101,8 @@ func TestNodeAttrsDeliverToSelfAndPeer(t *testing.T) {
 }
 
 func TestNodeAttrsUserTargetIsolated(t *testing.T) {
+	skipCrossUser(t) // Linbei fork
+
 	t.Parallel()
 
 	srv := servertest.NewServer(t)

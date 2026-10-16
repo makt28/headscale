@@ -194,6 +194,8 @@ func TestPolicyChanges(t *testing.T) {
 	})
 
 	t.Run("policy_with_multiple_users", func(t *testing.T) {
+		skipCrossUser(t) // Linbei fork
+
 		t.Parallel()
 
 		srv := servertest.NewServer(t)

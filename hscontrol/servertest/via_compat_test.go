@@ -75,6 +75,8 @@ var viaCompatTests = []struct {
 //   - captures[name].packet_filter_rules (golden filter rule comparison)
 //   - input.api_response_code/body (error case handling)
 func TestViaGrantMapCompat(t *testing.T) {
+	skipCrossUser(t) // Linbei fork: captures mix users and tagged routers
+
 	t.Parallel()
 
 	for _, tc := range viaCompatTests {

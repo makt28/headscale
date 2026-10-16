@@ -511,6 +511,9 @@ func (h *Headscale) createRouter(apiV1Mux, apiV2Mux http.Handler) *chi.Mux {
 
 	r.Post("/verify", h.VerifyHandler)
 
+	// Linbei fork: DERP mesh registry for SingR nodes, see linbei_derp_mesh.go.
+	h.mountLinbeiDERPMesh(r)
+
 	if h.cfg.DERP.ServerEnabled {
 		r.HandleFunc("/derp", h.DERPServer.DERPHandler)
 		r.HandleFunc("/derp/probe", derpServer.DERPProbeHandler)
